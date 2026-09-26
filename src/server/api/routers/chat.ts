@@ -2,214 +2,221 @@ import { TRPCError } from "@trpc/server";
 import { z } from "zod";
 
 import {
-    createTRPCRouter,
-    protectedProcedure,
+  createTRPCRouter,
+  protectedProcedure,
 } from "@/server/api/trpc";
 
-export const chatRouter = createTRPCRouter({
-    create: protectedProcedure
-        .input(
-            z.object({
-                title: z.string().optional(),
-            }),
-        )
-        .mutation(async ({ ctx, input }) => {
-            return ctx.db.chat.create({
-                data: {
-                    title: input.title,
-                    userId: ctx.session.user.id,
-                },
-            });
-        }),
+type OpenRouterResponse = {
+  choices?: Array<{
+    message?: {
+      content?: string;
+    };
+  }>;
+};
 
-    getAll: protectedProcedure.query(async ({ ctx }) => {
-        return ctx.db.chat.findMany({
-            where: {
-                userId: ctx.session.user.id,
-            },
-            orderBy: {
-                updatedAt: "desc",
-            },
-            include: {
-                messages: {
-                    where: {
-                        role: "user",
-                    },
-                    orderBy: {
-                        createdAt: "asc",
-                    },
-                    take: 1,
-                },
-            },
-        });
+export const chatRouter = createTRPCRouter({
+  create: protectedProcedure
+    .input(
+      z.object({
+        title: z.string().optional(),
+      }),
+    )
+    .mutation(async ({ ctx, input }) => {
+      return ctx.db.chat.create({
+        data: {
+          title: input.title,
+          userId: ctx.session.user.id,
+        },
+      });
     }),
 
-    getById: protectedProcedure
-        .input(
-            z.object({
-                chatId: z.string(),
-            }),
-        )
-        .query(async ({ ctx, input }) => {
-            return ctx.db.chat.findFirst({
-                where: {
-                    id: input.chatId,
-                    userId: ctx.session.user.id,
-                },
-                include: {
-                    messages: {
-                        orderBy: {
-                            createdAt: "asc",
-                        },
-                    },
-                },
-            });
-        }),
+  getAll: protectedProcedure.query(async ({ ctx }) => {
+    return ctx.db.chat.findMany({
+      where: {
+        userId: ctx.session.user.id,
+      },
+      orderBy: {
+        updatedAt: "desc",
+      },
+      include: {
+        messages: {
+          where: {
+            role: "user",
+          },
+          orderBy: {
+            createdAt: "asc",
+          },
+          take: 1,
+        },
+      },
+    });
+  }),
 
-    sendMessage: protectedProcedure
-        .input(
-            z.object({
-                chatId: z.string(),
-                content: z.string().min(1),
-            }),
-        )
-        .mutation(async ({ ctx, input }) => {
-            // Check that the chat belongs to the logged-in user
-            const chat = await ctx.db.chat.findFirst({
-                where: {
-                    id: input.chatId,
-                    userId: ctx.session.user.id,
-                },
-                include: {
-                    messages: {
-                        orderBy: {
-                            createdAt: "asc",
-                        },
-                    },
-                },
-            });
+  getById: protectedProcedure
+    .input(
+      z.object({
+        chatId: z.string(),
+      }),
+    )
+    .query(async ({ ctx, input }) => {
+      return ctx.db.chat.findFirst({
+        where: {
+          id: input.chatId,
+          userId: ctx.session.user.id,
+        },
+        include: {
+          messages: {
+            orderBy: {
+              createdAt: "asc",
+            },
+          },
+        },
+      });
+    }),
 
-            if (!chat) {
-                throw new TRPCError({
-                    code: "NOT_FOUND",
-                    message: "Chat not found",
-                });
-            }
+  sendMessage: protectedProcedure
+    .input(
+      z.object({
+        chatId: z.string(),
+        content: z.string().min(1),
+      }),
+    )
+    .mutation(async ({ ctx, input }) => {
+      const chat = await ctx.db.chat.findFirst({
+        where: {
+          id: input.chatId,
+          userId: ctx.session.user.id,
+        },
+        include: {
+          messages: {
+            orderBy: {
+              createdAt: "asc",
+            },
+          },
+        },
+      });
 
-            // Save user message
-            const userMessage = await ctx.db.message.create({
-                data: {
-                    content: input.content,
-                    role: "user",
-                    chatId: input.chatId,
-                },
-            });
+      if (!chat) {
+        throw new TRPCError({
+          code: "NOT_FOUND",
+          message: "Chat not found",
+        });
+      }
 
-            // Set chat title from the first user message
-            if (!chat.title) {
-                const title =
-                    input.content.length > 30
-                        ? `${input.content.slice(0, 30)}...`
-                        : input.content;
+      // Save user message
+      const userMessage = await ctx.db.message.create({
+        data: {
+          content: input.content,
+          role: "user",
+          chatId: input.chatId,
+        },
+      });
 
-                await ctx.db.chat.update({
-                    where: {
-                        id: input.chatId,
-                    },
-                    data: {
-                        title,
-                    },
-                });
-            }
+      // Set chat title from the first user message
+      if (!chat.title) {
+        const title =
+          input.content.length > 30
+            ? `${input.content.slice(0, 30)}...`
+            : input.content;
 
-            // Prepare conversation
-            const messages = [
-                ...chat.messages.map((message) => ({
-                    role: message.role as "user" | "assistant",
-                    content: message.content,
-                })),
-                {
-                    role: "user" as const,
-                    content: input.content,
-                },
-            ];
+        await ctx.db.chat.update({
+          where: {
+            id: input.chatId,
+          },
+          data: {
+            title,
+          },
+        });
+      }
 
-            // Call OpenRouter
-            const response = await fetch(
-                "https://openrouter.ai/api/v1/chat/completions",
-                {
-                    method: "POST",
-                    headers: {
-                        "Content-Type": "application/json",
-                        Authorization: `Bearer ${process.env.OPENROUTER_API_KEY}`,
-                    },
-                    body: JSON.stringify({
-                        model: "openrouter/free",
-                        messages,
-                    }),
-                },
-            );
+      // Prepare conversation
+      const messages = [
+        ...chat.messages.map((message) => ({
+          role: message.role as "user" | "assistant",
+          content: message.content,
+        })),
+        {
+          role: "user" as const,
+          content: input.content,
+        },
+      ];
 
-            if (!response.ok) {
-                const errorText = await response.text();
+      // Call OpenRouter
+      const response = await fetch(
+        "https://openrouter.ai/api/v1/chat/completions",
+        {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            Authorization: `Bearer ${process.env.OPENROUTER_API_KEY}`,
+          },
+          body: JSON.stringify({
+            model: "openrouter/free",
+            messages,
+          }),
+        },
+      );
 
-                console.error("OpenRouter API error:", errorText);
+      if (!response.ok) {
+        const errorText = await response.text();
 
-                throw new TRPCError({
-                    code: "INTERNAL_SERVER_ERROR",
-                    message: "Failed to get AI response",
-                });
-            }
+        console.error("OpenRouter API error:", errorText);
 
-            const data = await response.json();
+        throw new TRPCError({
+          code: "INTERNAL_SERVER_ERROR",
+          message: "Failed to get AI response",
+        });
+      }
 
-            const assistantContent =
-                data.choices?.[0]?.message?.content?.trim();
+      const data = (await response.json()) as OpenRouterResponse;
 
-            if (!assistantContent) {
-                throw new TRPCError({
-                    code: "INTERNAL_SERVER_ERROR",
-                    message: "AI returned an empty response",
-                });
-            }
+      const assistantContent =
+        data.choices?.[0]?.message?.content?.trim();
 
-            // Save AI response
-            const assistantMessage = await ctx.db.message.create({
-                data: {
-                    content: assistantContent,
-                    role: "assistant",
-                    chatId: input.chatId,
-                },
-            });
+      if (!assistantContent) {
+        throw new TRPCError({
+          code: "INTERNAL_SERVER_ERROR",
+          message: "AI returned an empty response",
+        });
+      }
 
-            // Update chat timestamp
-            await ctx.db.chat.update({
-                where: {
-                    id: input.chatId,
-                },
-                data: {
-                    updatedAt: new Date(),
-                },
-            });
+      // Save AI response
+      const assistantMessage = await ctx.db.message.create({
+        data: {
+          content: assistantContent,
+          role: "assistant",
+          chatId: input.chatId,
+        },
+      });
 
-            return {
-                userMessage,
-                assistantMessage,
-            };
-        }),
+      // Update chat timestamp
+      await ctx.db.chat.update({
+        where: {
+          id: input.chatId,
+        },
+        data: {
+          updatedAt: new Date(),
+        },
+      });
 
-    delete: protectedProcedure
-        .input(
-            z.object({
-                chatId: z.string(),
-            }),
-        )
-        .mutation(async ({ ctx, input }) => {
-            return ctx.db.chat.deleteMany({
-                where: {
-                    id: input.chatId,
-                    userId: ctx.session.user.id,
-                },
-            });
-        }),
+      return {
+        userMessage,
+        assistantMessage,
+      };
+    }),
+
+  delete: protectedProcedure
+    .input(
+      z.object({
+        chatId: z.string(),
+      }),
+    )
+    .mutation(async ({ ctx, input }) => {
+      return ctx.db.chat.deleteMany({
+        where: {
+          id: input.chatId,
+          userId: ctx.session.user.id,
+        },
+      });
+    }),
 });

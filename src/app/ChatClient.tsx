@@ -24,7 +24,7 @@ export default function ChatClient() {
         const firstMessage = chat.messages?.[0]?.content;
 
         const displayTitle =
-          chat.title ||
+          chat.title ??
           (firstMessage
             ? firstMessage.length > 30
               ? `${firstMessage.slice(0, 30)}...`

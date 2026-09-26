@@ -35,7 +35,7 @@ export default function NotificationBell() {
             <div className="mb-2 text-xl">🔔</div>
 
             <p className="text-xs font-medium text-white/60">
-              You're all caught up
+              You&apos;re all caught up
             </p>
 
             <p className="mt-1 text-[10px] text-white/25">
